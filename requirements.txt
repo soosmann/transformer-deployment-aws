@@ -1,0 +1,5 @@
+transformers==4.45.2
+streamlit==1.37.1
+pillow==10.4.0
+torch==2.4.0
+boto3==1.36.3
