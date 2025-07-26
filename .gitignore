@@ -10,9 +10,12 @@
 *.onnx
 *.pb
 
+__pycache__
 /creds
 /vit-human-pose-classification
 /tinybert-sentiment-analysis
 /tinybert-disaster-tweets
 /train_dir
 /data_download
+/ml-model-dir
+.DS_Store
