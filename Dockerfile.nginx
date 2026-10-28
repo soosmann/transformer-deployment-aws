@@ -1,0 +1,6 @@
+FROM nginx:stable-alpine
+
+# Learning note: the course installed curl here to inspect the proxy manually.
+# Install curl: not required by the proxy itself, so omitted from this image.
+
+COPY ./nginx.conf /etc/nginx/nginx.conf

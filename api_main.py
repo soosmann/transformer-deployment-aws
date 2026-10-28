@@ -1,97 +1,91 @@
-from api.data_model import NLPDataInput, ImageDataInput, NLPDataOutput, ImageDataOutput
-from api import s3
-from fastapi import FastAPI
-import uvicorn
-import os
-import torch
-from transformers import pipeline, AutoImageProcessor
-import time
+"""FastAPI entry point for the course's three trained classifiers."""
 
-app = FastAPI()
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+import logging
+from time import perf_counter
 
-################ Model Download Start ################
-force_download = False
+from fastapi import FastAPI, HTTPException
 
-model_name = "tinybert-sentiment-analysis/"
-local_path = os.path.join("ml-model-dir", model_name)
-s3_path = os.path.join("ml-models", model_name)
-if not os.path.isdir(local_path) or force_download:
-    print("sdakfjsk")
-    s3.download_dir_from_s3(local_path, s3_path)
-sentiment_model = pipeline("sentiment-analysis", model=local_path, device=device)
+from api.data_model import ImageDataInput, ImageDataOutput, NLPDataInput, NLPDataOutput
+from api.models import get_model
 
-model_name = "tinybert-disaster-tweets/"
-local_path = os.path.join("ml-model-dir", model_name)
-s3_path = os.path.join("ml-models", model_name)
-if not os.path.isdir(local_path) or force_download:
-    s3.download_dir_from_s3(local_path, s3_path)
-disaster_model = pipeline("text-classification", model=local_path, device=device)
+logger = logging.getLogger(__name__)
+app = FastAPI(
+    title="Transformer Model Deployment API",
+    description="Course-based TinyBERT and ViT inference with local or S3 model artifacts.",
+    version="1.0.0",
+)
+
+# ################ Model Download Start ################
+# Learning note: model downloads originally ran at import time. They now live in
+# api/models.py and run on the first prediction, so /docs works without weights.
+# Set AWS_S3_BUCKET for S3 downloads, or put trained artifacts in MODEL_DIR.
+# ################ Model Download End ################
 
 
-model_name = "vit-human-pose-classification/"
-local_path = os.path.join("ml-model-dir", model_name)
-s3_path = os.path.join("ml-models", model_name)
-vit_ckpt = "google/vit-base-patch16-224-in21k"
-image_processor = AutoImageProcessor.from_pretrained(vit_ckpt, use_fast=True)
-if not os.path.isdir(local_path) or force_download:
-    s3.download_dir_from_s3(local_path, s3_path)
-pose_model = pipeline("image-classification", model=local_path, image_processor=image_processor, device=device)
-################ Model Download Start ################
+def load_classifier(model_name):
+    try:
+        return get_model(model_name)
+    except Exception as exc:
+        logger.exception("Could not load model %s", model_name)
+        raise HTTPException(
+            status_code=503,
+            detail="Model unavailable. Provide trained artifacts in MODEL_DIR or configure AWS_S3_BUCKET. See README.md.",
+        ) from exc
 
 
+@app.get("/health", tags=["Service"])
+def health():
+    """Liveness only: model loading is deferred until a prediction is requested."""
+    return {"status": "ok", "model_loading": "on_first_request"}
 
-@app.post("/api/v1/sentiment_analysis")
+
+def classify_text(data, model_name):
+    classifier = load_classifier(model_name)
+    t0 = perf_counter()
+    output = classifier(data.texts, truncation=True)
+    dt = int((perf_counter() - t0) * 1000)  # in milliseconds
+    return NLPDataOutput(
+        pred_model=model_name,
+        texts=data.texts,
+        labels=[item["label"] for item in output],
+        scores=[item["score"] for item in output],
+        prediction_time=dt,
+    )
+
+
+@app.post("/api/v1/sentiment_analysis", tags=["Inference"])
 def sentiment_analysis(data: NLPDataInput) -> NLPDataOutput:
-    t0 = time.time()
-    output = sentiment_model(data.texts)
-    dt = int((time.time() - t0) * 1000)  # in milliseconds
+    return classify_text(data, "tinybert-sentiment-analysis")
 
-    labels = [x["label"] for x in output]
-    scores = [x["score"] for x in output]
 
-    return NLPDataOutput(
-        pred_model="tinybert-sentiment-analysis",
-        texts=data.texts,
-        labels=labels,
-        scores=scores,
-        prediction_time=dt
-    )
-
-@app.post("/api/v1/disaster_classifier")
+@app.post("/api/v1/disaster_classifier", tags=["Inference"])
 def disaster_classifier(data: NLPDataInput) -> NLPDataOutput:
-    t0 = time.time()
-    output = disaster_model(data.texts)
-    dt = int((time.time() - t0) * 1000)
+    return classify_text(data, "tinybert-disaster-tweets")
 
-    labels = [x["label"] for x in output]
-    scores = [x["score"] for x in output]
 
-    return NLPDataOutput(
-        pred_model="tinybert-disaster-tweets",
-        texts=data.texts,
-        labels=labels,
-        scores=scores,
-        prediction_time=dt
-    )
-
-@app.post("/api/v1/pose_classifier")
+@app.post("/api/v1/pose_classifier", tags=["Inference"])
 def pose_classifier(data: ImageDataInput) -> ImageDataOutput:
-    t0 = time.time()
-    output = pose_model(data.urls) 
-    dt = int((time.time() - t0) * 1000)
-
-    labels = [x[0]["label"] for x in output]
-    scores = [x[0]["score"] for x in output]
-
+    classifier = load_classifier("vit-human-pose-classification")
+    urls = [str(url) for url in data.urls]
+    t0 = perf_counter()
+    try:
+        output = classifier(urls, timeout=10)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(
+            status_code=422, detail="Could not read one of the supplied images."
+        ) from exc
+    dt = int((perf_counter() - t0) * 1000)
     return ImageDataOutput(
         pred_model="vit-human-pose-classification",
-        urls=data.urls,
-        labels=labels,
-        scores=scores,
-        prediction_time=dt
+        urls=urls,
+        labels=[item[0]["label"] for item in output],
+        scores=[item[0]["score"] for item in output],
+        prediction_time=dt,
     )
+
 
 # when errors, use: uvicorn api_main:app --reload --port 8000
 if __name__ == "__main__":
-    uvicorn.run(app=app, port=8000, reload=True)
+    import uvicorn
+
+    uvicorn.run("api_main:app", host="127.0.0.1", port=8000, reload=True)

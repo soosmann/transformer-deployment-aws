@@ -19,3 +19,21 @@ __pycache__
 /data_download
 /ml-model-dir
 .DS_Store
+
+# Local credentials and environment configuration
+.aws/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python tooling and notebook checkpoints
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.coverage
+htmlcov/
+*.egg-info/

@@ -1,0 +1,12 @@
+# Optional local credentials. On EC2, use an instance role instead.
+services:
+  app:
+    volumes:
+      - ${AWS_CREDENTIALS_DIR:-./.aws}:/root/.aws:ro
+    environment:
+      AWS_PROFILE: ${AWS_PROFILE:-default}
+  streamlit:
+    volumes:
+      - ${AWS_CREDENTIALS_DIR:-./.aws}:/root/.aws:ro
+    environment:
+      AWS_PROFILE: ${AWS_PROFILE:-default}

@@ -1,0 +1,42 @@
+services:
+  app:
+    image: model-deployment:local
+    build:
+      context: .
+    environment:
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET:-}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-eu-north-1}
+      AWS_S3_MODEL_PREFIX: ${AWS_S3_MODEL_PREFIX:-ml-models}
+      MODEL_DIR: /app/ml-model-dir
+    volumes:
+      - ./ml-model-dir:/app/ml-model-dir
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  nginx:
+    build:
+      context: .
+      dockerfile: Dockerfile.nginx
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:80:80"
+
+  streamlit:
+    image: model-deployment:local
+    build:
+      context: .
+    command: ["streamlit", "run", "model_serve_streamlit.py", "--server.address=0.0.0.0", "--server.port=8501"]
+    environment:
+      API_URL: http://app:8000/api/v1/
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET:-}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-eu-north-1}
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:8501:8501"

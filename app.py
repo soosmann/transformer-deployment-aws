@@ -1,44 +1,39 @@
-from transformers import pipeline
-import streamlit as st
+"""Earlier course step: run sentiment inference directly inside Streamlit."""
+
 import os
-import boto3
-import torch
+from pathlib import Path
 
-bucket_name = "mlops-mhofmann"
-local_path = 'data_download/tinybert-sentiment-analysis'
-s3_prefix = 'ml-models/tinybert-sentiment-analysis/'
+import streamlit as st
 
-s3 = boto3.client('s3')
-def download_dir_from_s3(bucket_name, local_path, s3_prefix):
-    """Download a directory from an S3 bucket"""
-    if not os.path.exists(local_path):
-        os.makedirs(local_path, exist_ok=True)
+from api.models import get_model
+from api.s3 import download_dir_from_s3
 
-    paginator = s3.get_paginator("list_objects_v2")
-    for result in paginator.paginate(Bucket=bucket_name, Prefix=s3_prefix):
-        if "Contents" in result:
-            for obj in result["Contents"]:
-                s3_key = obj["Key"]
-                print(s3_key)
-                local_file_path = os.path.join(local_path, s3_key.replace(s3_prefix, ""))
-                os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
+st.set_page_config(page_title="Sentiment Analysis · Direct Inference", page_icon="💬")
+st.title("Sentiment Analysis")
+st.caption("Learning example: S3 model download and inference inside Streamlit.")
+st.info("For the full three-model API demo, run model_serve_streamlit.py instead.")
 
-                s3.download_file(bucket_name, s3_key, local_file_path)
-                print(f"Downloaded {obj['Key']} to {local_file_path}.")
+local_path = Path(os.getenv("MODEL_DIR", "ml-model-dir")) / "tinybert-sentiment-analysis"
+prefix = os.getenv("AWS_S3_MODEL_PREFIX", "ml-models").strip("/")
 
-st.title("Machine Learning Model Deployment at Server")           
-button = st.button("Download Model")
-if button:
-    with st.spinner("Downloading model..."):
-        download_dir_from_s3(bucket_name, local_path, s3_prefix)
+if st.button("Download model from S3", disabled=local_path.is_dir()):
+    try:
+        with st.spinner("Downloading model..."):
+            download_dir_from_s3(local_path, f"{prefix}/tinybert-sentiment-analysis")
+        st.success("Model downloaded.")
+    except Exception:
+        st.error("Download failed. Check AWS_S3_BUCKET, your credentials, and the model prefix.")
 
-text = st.text_area("Enter Your Review")
-predict = st.button("Predict")
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-classifier = pipeline("sentiment-analysis", model="data_download/tinybert-sentiment-analysis", device=device)
-if predict:
-    with st.spinner("Predicting..."):
-        output = classifier(text)
-        st.write(output)
-        st.info(output)
+text = st.text_area("Enter your review")
+if st.button("Predict", type="primary"):
+    if not text.strip():
+        st.warning("Enter a review first.")
+    else:
+        try:
+            with st.spinner("Loading model and predicting..."):
+                classifier = get_model("tinybert-sentiment-analysis")
+                st.json(classifier(text, truncation=True))
+        except Exception:
+            st.error(
+                "Model unavailable. Supply local trained artifacts or configure S3; see README.md."
+            )
